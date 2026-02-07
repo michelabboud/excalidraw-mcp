@@ -451,9 +451,9 @@ function ExcalidrawApp() {
     return () => document.removeEventListener("keydown", handler);
   }, [displayMode, toggleFullscreen]);
 
-  // SVG-first fullscreen: keep showing SVG during animation, load fonts in bg
+  // Mount editor when entering fullscreen (only react to displayMode, not elements)
   useEffect(() => {
-    if (displayMode !== "fullscreen" || !inputIsFinal || elements.length === 0) {
+    if (displayMode !== "fullscreen") {
       setEditorReady(false);
       setExcalidrawApi(null);
       setEditorSettled(false);
@@ -462,51 +462,37 @@ function ExcalidrawApp() {
     document.fonts.ready.then(() => {
       setTimeout(() => setEditorReady(true), 300);
     });
-  }, [displayMode, inputIsFinal, elements.length]);
+  }, [displayMode]);
 
-  // After editor mounts: refresh text dimensions, set viewport, then reveal
+  // After editor mounts: refresh text dimensions, then reveal
   const mountEditor = displayMode === "fullscreen" && inputIsFinal && elements.length > 0 && editorReady;
   useEffect(() => {
     if (!mountEditor || !excalidrawApi) return;
+    if (editorSettled) return; // already revealed, don't redo
     const api = excalidrawApi;
 
-    const waitForFonts = async () => {
+    const settle = async () => {
       try { await document.fonts.load('20px Excalifont'); } catch {}
       await document.fonts.ready;
 
       const sceneElements = api.getSceneElements();
-      if (!sceneElements?.length) return;
-      const { elements: fixed } = restore(
-        { elements: sceneElements },
-        null, null,
-        { refreshDimensions: true }
-      );
-      // Set viewport imperatively — initialData.appState is ignored by Excalidraw
-      const vp = svgViewportRef.current;
-      const appState = api.getAppState() || {};
-      const cw = appState.width || window.innerWidth;
-      const ch = appState.height || window.innerHeight;
-      let appStateUpdate: any = {};
-      if (vp) {
-        const zoom = Math.min(cw / vp.width, ch / vp.height);
-        const scrollX = cw / 2 - (vp.x + vp.width / 2) * zoom;
-        const scrollY = ch / 2 - (vp.y + vp.height / 2) * zoom;
-        appStateUpdate = { scrollX, scrollY, zoom: { value: zoom } };
+      if (sceneElements?.length) {
+        const { elements: fixed } = restore(
+          { elements: sceneElements },
+          null, null,
+          { refreshDimensions: true }
+        );
+        api.updateScene({
+          elements: fixed,
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
       }
-      api.updateScene({
-        elements: fixed,
-        appState: appStateUpdate,
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-      // Wait one frame for render to settle, then reveal editor
-      requestAnimationFrame(() => {
-        setEditorSettled(true);
-      });
+      requestAnimationFrame(() => setEditorSettled(true));
     };
 
-    const timer = setTimeout(waitForFonts, 200);
+    const timer = setTimeout(settle, 200);
     return () => clearTimeout(timer);
-  }, [mountEditor, excalidrawApi]);
+  }, [mountEditor, excalidrawApi, editorSettled]);
 
   // Keep elementsRef in sync for ontoolresult handler (which captures closure once)
   useEffect(() => { elementsRef.current = elements; }, [elements]);
