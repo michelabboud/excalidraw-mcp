@@ -35755,7 +35755,7 @@ var EMPTY_COMPLETION_RESULT = {
   }
 };
 
-// server.ts
+// src/server.ts
 import fs from "node:fs/promises";
 import path from "node:path";
 var DIST_DIR = import.meta.filename.endsWith(".ts") ? path.join(import.meta.dirname, "dist") : import.meta.dirname;

@@ -1,6 +1,6 @@
 import { createMcpHandler } from "mcp-handler";
 import path from "node:path";
-import { registerTools } from "../server.js";
+import { registerTools } from "../src/server.js";
 
 const mcpHandler = createMcpHandler(
   (server) => {
