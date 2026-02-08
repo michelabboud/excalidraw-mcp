@@ -353,13 +353,17 @@ Snake moves right by adding a head segment and deleting the tail. On eating the 
   {"type":"delete","ids":"s4"},
   {"type":"cameraUpdate","width":400,"height":300,"x":0,"y":0},
   {"type":"rectangle","id":"s9","x":256,"y":74,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
-  {"type":"delete","ids":"ap"}
+  {"type":"delete","ids":"ap"},
+  {"type":"cameraUpdate","width":400,"height":300,"x":1,"y":0},
+  {"type":"rectangle","id":"s10","x":256,"y":46,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"delete","ids":"s5"}
 ]
 \`\`\`
 
 Key techniques:
 - Add head + delete tail each frame = snake movement illusion
-- On eat (last frame): delete apple instead of tail = snake grows by one
+- On eat: delete apple instead of tail = snake grows by one
+- Post-eat frame resumes normal add-head/delete-tail, proving the snake is now longer
 - Camera nudges (0,0 → 1,0 → 0,1 → ...) add subtle motion between frames
 - Always use NEW ids for added segments (s0→s4→s5→...); never reuse deleted ids
 
