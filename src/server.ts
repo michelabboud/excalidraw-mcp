@@ -322,38 +322,44 @@ Pattern:
 4. Draw replacements at same coordinates (different color/content)
 5. Repeat
 
-Example prompt: "Show the lifecycle of a feature task"
+Example prompt: "Pixel snake eats apple"
 
-3 frames: TODO card (blue) → IN PROGRESS card (orange) → DONE card (green), each replacing the previous at the same position. Camera nudges between frames, then zooms out to reveal stats.
+Snake moves right by adding a head segment and deleting the tail. On eating the apple, tail is NOT deleted (snake grows). Camera nudges between frames add subtle motion.
 
 \`\`\`json
 [
-  {"type":"cameraUpdate","width":400,"height":300,"x":80,"y":30},
-  {"type":"text","id":"hdr","x":155,"y":45,"text":"Sprint Board","fontSize":24,"strokeColor":"#1e1e1e"},
-  {"type":"rectangle","id":"c1","x":150,"y":100,"width":200,"height":90,"backgroundColor":"#a5d8ff","fillStyle":"solid","roundness":{"type":3},"strokeColor":"#4a9eed","label":{"text":"Add Login","fontSize":20}},
-  {"type":"text","id":"s1","x":210,"y":200,"text":"TODO","fontSize":16,"strokeColor":"#757575"},
-  {"type":"cameraUpdate","width":400,"height":300,"x":85,"y":35},
-  {"type":"delete","ids":"c1,s1"},
-  {"type":"rectangle","id":"c2","x":150,"y":100,"width":200,"height":90,"backgroundColor":"#ffd8a8","fillStyle":"solid","roundness":{"type":3},"strokeColor":"#f59e0b","label":{"text":"Add Login","fontSize":20}},
-  {"type":"text","id":"s2","x":185,"y":200,"text":"IN PROGRESS","fontSize":16,"strokeColor":"#f59e0b"},
-  {"type":"rectangle","id":"dev","x":380,"y":115,"width":80,"height":50,"backgroundColor":"#d0bfff","fillStyle":"solid","roundness":{"type":3},"strokeColor":"#8b5cf6","label":{"text":"dev","fontSize":16}},
-  {"type":"arrow","id":"a1","x":350,"y":145,"width":30,"height":0,"points":[[0,0],[30,0]],"strokeColor":"#8b5cf6","strokeWidth":2,"endArrowhead":"arrow"},
-  {"type":"cameraUpdate","width":600,"height":450,"x":30,"y":0},
-  {"type":"delete","ids":"c2,s2,dev,a1"},
-  {"type":"rectangle","id":"c3","x":150,"y":100,"width":200,"height":90,"backgroundColor":"#b2f2bb","fillStyle":"solid","roundness":{"type":3},"strokeColor":"#22c55e","label":{"text":"Add Login","fontSize":20}},
-  {"type":"text","id":"s3","x":215,"y":200,"text":"DONE","fontSize":18,"strokeColor":"#15803d"},
-  {"type":"arrow","id":"ck1","x":260,"y":240,"width":-10,"height":12,"points":[[0,0],[-10,12]],"strokeColor":"#15803d","strokeWidth":3,"endArrowhead":null},
-  {"type":"arrow","id":"ck2","x":250,"y":252,"width":18,"height":-24,"points":[[0,0],[18,-24]],"strokeColor":"#15803d","strokeWidth":3,"endArrowhead":null},
-  {"type":"rectangle","id":"stats","x":400,"y":110,"width":150,"height":60,"backgroundColor":"#c3fae8","fillStyle":"solid","roundness":{"type":3},"strokeColor":"#06b6d4","label":{"text":"1,234 users","fontSize":18}},
-  {"type":"arrow","id":"a2","x":350,"y":145,"width":50,"height":0,"points":[[0,0],[50,0]],"strokeColor":"#06b6d4","strokeWidth":2,"endArrowhead":"arrow"}
+  {"type":"cameraUpdate","width":400,"height":300,"x":0,"y":0},
+  {"type":"ellipse","id":"ap","x":260,"y":78,"width":20,"height":20,"backgroundColor":"#ef4444","fillStyle":"solid","strokeColor":"#ef4444"},
+  {"type":"rectangle","id":"s0","x":60,"y":130,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"rectangle","id":"s1","x":88,"y":130,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"rectangle","id":"s2","x":116,"y":130,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"rectangle","id":"s3","x":144,"y":130,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"cameraUpdate","width":400,"height":300,"x":1,"y":0},
+  {"type":"rectangle","id":"s4","x":172,"y":130,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"delete","ids":"s0"},
+  {"type":"cameraUpdate","width":400,"height":300,"x":0,"y":1},
+  {"type":"rectangle","id":"s5","x":200,"y":130,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"delete","ids":"s1"},
+  {"type":"cameraUpdate","width":400,"height":300,"x":1,"y":0},
+  {"type":"rectangle","id":"s6","x":228,"y":130,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"delete","ids":"s2"},
+  {"type":"cameraUpdate","width":400,"height":300,"x":0,"y":0},
+  {"type":"rectangle","id":"s7","x":256,"y":130,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"delete","ids":"s3"},
+  {"type":"cameraUpdate","width":400,"height":300,"x":1,"y":1},
+  {"type":"rectangle","id":"s8","x":256,"y":102,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"delete","ids":"s4"},
+  {"type":"cameraUpdate","width":400,"height":300,"x":0,"y":0},
+  {"type":"rectangle","id":"s9","x":256,"y":74,"width":28,"height":28,"backgroundColor":"#22c55e","fillStyle":"solid","strokeColor":"#15803d","strokeWidth":1},
+  {"type":"delete","ids":"ap"}
 ]
 \`\`\`
 
 Key techniques:
-- Same x,y coordinates (150,100) reused across all 3 cards — creates illusion of transformation
-- Camera nudge (80,30 → 85,35) adds subtle motion between frames
-- Camera zoom out (400x300 → 600x450) reveals new elements in frame 3
-- Each frame deletes the previous card + accessories, then draws replacements
+- Add head + delete tail each frame = snake movement illusion
+- On eat (last frame): delete apple instead of tail = snake grows by one
+- Camera nudges (0,0 → 1,0 → 0,1 → ...) add subtle motion between frames
+- Always use NEW ids for added segments (s0→s4→s5→...); never reuse deleted ids
 
 ## Dark Mode
 
