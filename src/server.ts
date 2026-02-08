@@ -1,10 +1,12 @@
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { z } from "zod/v4";
+import type { CheckpointStore } from "./checkpoint-store.js";
 
 // Works both from source (src/server.ts) and compiled (dist/server.js)
 const DIST_DIR = import.meta.filename.endsWith(".ts")
@@ -407,7 +409,7 @@ Use the Primary Colors from above — they're bright enough on dark backgrounds.
  * Registers all Excalidraw tools and resources on the given McpServer.
  * Shared between local (main.ts) and Vercel (api/mcp.ts) entry points.
  */
-export function registerTools(server: McpServer, distDir: string): void {
+export function registerTools(server: McpServer, distDir: string, store: CheckpointStore): void {
   const resourceUri = "ui://excalidraw/mcp-app.html";
 
   // ============================================================
@@ -443,15 +445,60 @@ Call read_me first to learn the element format.`,
       _meta: { ui: { resourceUri } },
     },
     async ({ elements }): Promise<CallToolResult> => {
+      let parsed: any[];
       try {
-        JSON.parse(elements);
+        parsed = JSON.parse(elements);
       } catch (e) {
         return {
           content: [{ type: "text", text: `Invalid JSON in elements: ${(e as Error).message}. Ensure no comments, no trailing commas, and proper quoting.` }],
           isError: true,
         };
       }
-      const checkpointId = Math.random().toString(36).slice(2, 8);
+
+      // Resolve restoreCheckpoint references and save fully resolved state
+      const restoreEl = parsed.find((el: any) => el.type === "restoreCheckpoint");
+      let resolvedElements: any[];
+
+      if (restoreEl?.id) {
+        const base = await store.load(restoreEl.id);
+        if (!base) {
+          return {
+            content: [{ type: "text", text: `Checkpoint "${restoreEl.id}" not found — it may have expired or never existed. Please recreate the diagram from scratch.` }],
+            isError: true,
+          };
+        }
+
+        const deleteIds = new Set<string>();
+        for (const el of parsed) {
+          if (el.type === "delete") {
+            for (const id of String(el.ids ?? el.id).split(",")) deleteIds.add(id.trim());
+          }
+        }
+
+        const baseFiltered = base.elements.filter((el: any) =>
+          !deleteIds.has(el.id) && !deleteIds.has(el.containerId)
+        );
+        const newEls = parsed.filter((el: any) =>
+          el.type !== "restoreCheckpoint" && el.type !== "delete"
+        );
+        resolvedElements = [...baseFiltered, ...newEls];
+      } else {
+        resolvedElements = parsed.filter((el: any) => el.type !== "delete");
+      }
+
+      // Check camera aspect ratios — nudge toward 4:3
+      const cameras = parsed.filter((el: any) => el.type === "cameraUpdate");
+      const badRatio = cameras.find((c: any) => {
+        if (!c.width || !c.height) return false;
+        const ratio = c.width / c.height;
+        return Math.abs(ratio - 4 / 3) > 0.15;
+      });
+      const ratioHint = badRatio
+        ? `\nTip: your cameraUpdate used ${badRatio.width}x${badRatio.height} — try to stick with 4:3 aspect ratio (e.g. 400x300, 800x600) in future.`
+        : "";
+
+      const checkpointId = crypto.randomUUID().replace(/-/g, "").slice(0, 18);
+      await store.save(checkpointId, { elements: resolvedElements });
       return {
         content: [{ type: "text", text: `Diagram displayed! Checkpoint id: "${checkpointId}".
 If user asks to create a new diagram - simply create a new one from scratch.
@@ -460,7 +507,7 @@ However, if the user wants to edit something on this diagram "${checkpointId}", 
 2) decide whether you want to make new diagram from scratch OR - use this one as starting checkpoint:
   simply start from the first element [{"type":"restoreCheckpoint","id":"${checkpointId}"}, ...your new elements...]
   this will use same diagram state as the user currently sees, including any manual edits they made in fullscreen, allowing you to add elements on top.
-  To remove elements, use: {"type":"delete","ids":"<id1>,<id2>"}` }],
+  To remove elements, use: {"type":"delete","ids":"<id1>,<id2>"}${ratioHint}` }],
         structuredContent: { checkpointId },
       };
     },
@@ -552,6 +599,47 @@ However, if the user wants to edit something on this diagram "${checkpointId}", 
     },
   );
 
+  // ============================================================
+  // Tool 4: save_checkpoint (private — widget only, for user edits)
+  // ============================================================
+  registerAppTool(server,
+    "save_checkpoint",
+    {
+      description: "Update checkpoint with user-edited state.",
+      inputSchema: { id: z.string(), data: z.string() },
+      _meta: { ui: { visibility: ["app"] } },
+    },
+    async ({ id, data }): Promise<CallToolResult> => {
+      try {
+        await store.save(id, JSON.parse(data));
+        return { content: [{ type: "text", text: "ok" }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `save failed: ${(err as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ============================================================
+  // Tool 5: read_checkpoint (private — widget only)
+  // ============================================================
+  registerAppTool(server,
+    "read_checkpoint",
+    {
+      description: "Read checkpoint state for restore.",
+      inputSchema: { id: z.string() },
+      _meta: { ui: { visibility: ["app"] } },
+    },
+    async ({ id }): Promise<CallToolResult> => {
+      try {
+        const data = await store.load(id);
+        if (!data) return { content: [{ type: "text", text: "" }] };
+        return { content: [{ type: "text", text: JSON.stringify(data) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `read failed: ${(err as Error).message}` }], isError: true };
+      }
+    },
+  );
+
   // CSP: allow Excalidraw to load fonts from esm.sh
   const cspMeta = {
     ui: {
@@ -591,11 +679,11 @@ However, if the user wants to edit something on this diagram "${checkpointId}", 
  * Creates a new MCP server instance with Excalidraw drawing tools.
  * Used by local entry point (main.ts) and Docker deployments.
  */
-export function createServer(): McpServer {
+export function createServer(store: CheckpointStore): McpServer {
   const server = new McpServer({
     name: "Excalidraw",
     version: "1.0.0",
   });
-  registerTools(server, DIST_DIR);
+  registerTools(server, DIST_DIR, store);
   return server;
 }

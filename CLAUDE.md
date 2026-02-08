@@ -56,6 +56,31 @@ Set on the resource content's `_meta.ui` so the host renders a border/background
 ### Fullscreen mode
 Supports `app.requestDisplayMode({ mode: "fullscreen" })`. Button appears on hover (top-right), hidden in fullscreen (host provides exit UI). Escape key exits fullscreen.
 
+## Checkpoint System
+
+Two-tier storage for diagram state persistence:
+
+### Architecture
+1. **Server-side store** (primary): `CheckpointStore` interface with 3 implementations:
+   - `FileCheckpointStore` — local dev, writes JSON to `$TMPDIR/excalidraw-mcp-checkpoints/`
+   - `MemoryCheckpointStore` — Vercel fallback (in-memory Map, lost on cold start)
+   - `RedisCheckpointStore` — Vercel with Upstash KV (persistent, 30-day TTL)
+   - Factory: `createVercelStore()` picks Redis if env vars exist, else Memory
+
+2. **localStorage** (widget-side cache): Fast local cache keyed by `excalidraw:<checkpointId>` for persisting user edits across page reloads within the same session.
+
+### Flow
+- `create_view` resolves `restoreCheckpoint` references server-side, saves fully resolved state, returns `checkpointId`
+- Widget reads checkpoints via `read_checkpoint` server tool (private, app-only visibility)
+- User edits in fullscreen sync back to server via `save_checkpoint` server tool (debounced)
+- `cameraUpdate` elements are stored as part of checkpoint data (not a separate viewport field)
+
+### Key Design Decisions
+- Server resolves checkpoints so the model never needs to re-send full element arrays
+- `containerId` filtering ensures bound text elements are deleted with their containers
+- Camera aspect ratio check nudges model toward 4:3 ratios
+- `checkpointId` uses `crypto.randomUUID()` truncated to 18 chars (collision-resistant, URL-safe)
+
 ## Build
 
 ```bash

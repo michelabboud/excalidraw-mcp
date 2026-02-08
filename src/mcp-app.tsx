@@ -5,7 +5,7 @@ import morphdom from "morphdom";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { initPencilAudio, playStroke } from "./pencil-audio";
-import { captureInitialElements, onEditorChange, setStorageKey, loadPersistedElements, getLatestEditedElements, setCheckpointId, setCheckpointViewport } from "./edit-context";
+import { captureInitialElements, onEditorChange, setStorageKey, loadPersistedElements, getLatestEditedElements, setCheckpointId } from "./edit-context";
 import "./global.css";
 
 // ============================================================
@@ -43,6 +43,20 @@ interface ViewportRect {
   height: number;
 }
 
+/** Convert raw shorthand elements → Excalidraw format (labels → bound text, font fix).
+ *  Preserves pseudo-elements like cameraUpdate (not valid Excalidraw types). */
+function convertRawElements(els: any[]): any[] {
+  const pseudoTypes = new Set(["cameraUpdate", "delete", "restoreCheckpoint"]);
+  const pseudos = els.filter((el: any) => pseudoTypes.has(el.type));
+  const real = els.filter((el: any) => !pseudoTypes.has(el.type));
+  const withDefaults = real.map((el: any) =>
+    el.label ? { ...el, label: { textAlign: "center", verticalAlign: "middle", ...el.label } } : el
+  );
+  const converted = convertToExcalidrawElements(withDefaults, { regenerateIds: false })
+    .map((el: any) => el.type === "text" ? { ...el, fontFamily: (FONT_FAMILY as any).Excalifont ?? 1 } : el);
+  return [...converted, ...pseudos];
+}
+
 function extractViewportAndElements(elements: any[]): {
   viewport: ViewportRect | null;
   drawElements: any[];
@@ -55,7 +69,7 @@ function extractViewportAndElements(elements: any[]): {
   const drawElements: any[] = [];
 
   for (const el of elements) {
-    if (el.type === "cameraUpdate" || el.type === "viewportUpdate") {
+    if (el.type === "cameraUpdate") {
       viewport = { x: el.x, y: el.y, width: el.width, height: el.height };
     } else if (el.type === "restoreCheckpoint") {
       restoreId = el.id;
@@ -70,7 +84,7 @@ function extractViewportAndElements(elements: any[]): {
   // group count/order so morphdom matches by position correctly (no cascade re-animations).
   // Using 1 (not 0) because Excalidraw treats opacity:0 as "unset" → defaults to 100.
   const processedDraw = deleteIds.size > 0
-    ? drawElements.map((el: any) => deleteIds.has(el.id) ? { ...el, opacity: 1 } : el)
+    ? drawElements.map((el: any) => (deleteIds.has(el.id) || deleteIds.has(el.containerId)) ? { ...el, opacity: 1 } : el)
     : drawElements;
 
   return { viewport, drawElements: processedDraw, restoreId, deleteIds };
@@ -215,10 +229,10 @@ function sceneToSvgViewBox(
   };
 }
 
-function DiagramView({ toolInput, isFinal, displayMode, onElements, editedElements, onViewport }: { toolInput: any; isFinal: boolean; displayMode: string; onElements?: (els: any[]) => void; editedElements?: any[]; onViewport?: (vp: ViewportRect) => void }) {
+function DiagramView({ toolInput, isFinal, displayMode, onElements, editedElements, onViewport, loadCheckpoint }: { toolInput: any; isFinal: boolean; displayMode: string; onElements?: (els: any[]) => void; editedElements?: any[]; onViewport?: (vp: ViewportRect) => void; loadCheckpoint?: (id: string) => Promise<{ elements: any[] } | null> }) {
   const svgRef = useRef<HTMLDivElement | null>(null);
   const latestRef = useRef<any[]>([]);
-  const restoredRef = useRef<{ id: string; elements: any[]; viewport: ViewportRect | null } | null>(null);
+  const restoredRef = useRef<{ id: string; elements: any[] } | null>(null);
   const [, setCount] = useState(0);
 
   // Init pencil audio on first mount
@@ -295,14 +309,9 @@ function DiagramView({ toolInput, isFinal, displayMode, onElements, editedElemen
       await ensureFontsLoaded();
 
       // Convert new elements (raw → Excalidraw format)
-      const withLabelDefaults = els.map((el: any) =>
-        el.label ? { ...el, label: { textAlign: "center", verticalAlign: "middle", ...el.label } } : el
-      );
-      const convertedNew = convertToExcalidrawElements(withLabelDefaults, { regenerateIds: false })
-        .map((el: any) => el.type === "text" ? { ...el, fontFamily: (FONT_FAMILY as any).Excalifont ?? 1 } : el);
-
-      // Merge with checkpoint base (already converted — skip re-conversion to avoid corruption)
-      const excalidrawEls = baseElements ? [...baseElements, ...convertedNew] : convertedNew;
+      const convertedNew = convertRawElements(els);
+      const baseReal = baseElements?.filter((el: any) => el.type !== "cameraUpdate") ?? [];
+      const excalidrawEls = [...baseReal, ...convertedNew];
 
       // Update scene bounds from all elements
       sceneBoundsRef.current = computeSceneBounds(excalidrawEls);
@@ -379,41 +388,40 @@ function DiagramView({ toolInput, isFinal, displayMode, onElements, editedElemen
     if (isFinal) {
       // Final input — parse complete JSON, render ALL elements
       const parsed = parsePartialElements(str);
-      const { viewport, drawElements, restoreId, deleteIds } = extractViewportAndElements(parsed);
+      let { viewport, drawElements, restoreId, deleteIds } = extractViewportAndElements(parsed);
 
-      // Load checkpoint base if restoring
+      // Load checkpoint base if restoring (async — from server)
       let base: any[] | undefined;
-      let savedViewport: ViewportRect | null = null;
-      if (restoreId) {
-        const saved = localStorage.getItem(`checkpoint:${restoreId}`);
-        if (saved) try {
-          const parsed = JSON.parse(saved);
-          // Handle both old format (array) and new format ({ elements, viewport })
-          base = Array.isArray(parsed) ? parsed : parsed.elements;
-          savedViewport = Array.isArray(parsed) ? null : parsed.viewport ?? null;
-        } catch {}
-        if (base && deleteIds.size > 0) {
-          base = base.filter((el: any) => !deleteIds.has(el.id));
+      const doFinal = async () => {
+        if (restoreId && loadCheckpoint) {
+          const saved = await loadCheckpoint(restoreId);
+          if (saved) {
+            base = saved.elements;
+            // Extract camera from base as fallback
+            if (!viewport) {
+              const cam = base.find((el: any) => el.type === "cameraUpdate");
+              if (cam) viewport = { x: cam.x, y: cam.y, width: cam.width, height: cam.height };
+            }
+            // Convert base with convertRawElements (handles both raw and already-converted)
+            base = convertRawElements(base);
+          }
+          if (base && deleteIds.size > 0) {
+            base = base.filter((el: any) => !deleteIds.has(el.id) && !deleteIds.has(el.containerId));
+          }
         }
-      }
 
-      // Use saved viewport as fallback if no cameraUpdate in new elements
-      const effectiveViewport = viewport ?? savedViewport;
+        latestRef.current = drawElements;
+        // Convert new elements for fullscreen editor
+        const convertedNew = convertRawElements(drawElements);
 
-      latestRef.current = drawElements;
-      // Convert new elements for fullscreen editor
-      const withDefaults = drawElements.map((el: any) =>
-        el.label ? { ...el, label: { textAlign: "center", verticalAlign: "middle", ...el.label } } : el
-      );
-      const convertedNew = convertToExcalidrawElements(withDefaults, { regenerateIds: false })
-        .map((el: any) => el.type === "text" ? { ...el, fontFamily: (FONT_FAMILY as any).Excalifont ?? 1 } : el);
-
-      // Merge base (already converted) + new converted
-      const allConverted = base ? [...base, ...convertedNew] : convertedNew;
-      captureInitialElements(allConverted);
-      // Only set elements if user hasn't edited yet (editedElements means user edits exist)
-      if (!editedElements) onElements?.(allConverted);
-      renderSvgPreview(drawElements, effectiveViewport, base);
+        // Merge base (converted) + new converted
+        const allConverted = base ? [...base, ...convertedNew] : convertedNew;
+        captureInitialElements(allConverted);
+        // Only set elements if user hasn't edited yet (editedElements means user edits exist)
+        if (!editedElements) onElements?.(allConverted);
+        if (!editedElements) renderSvgPreview(drawElements, viewport, base);
+      };
+      doFinal();
       return;
     }
 
@@ -431,45 +439,48 @@ function DiagramView({ toolInput, isFinal, displayMode, onElements, editedElemen
     }
 
     const safe = excludeIncompleteLastItem(parsed);
-    const { viewport, drawElements } = extractViewportAndElements(safe);
+    let { viewport, drawElements } = extractViewportAndElements(safe);
 
-    // Load checkpoint base (once per restoreId)
-    let base: any[] | undefined;
-    let savedViewport: ViewportRect | null = null;
-    if (streamRestoreId) {
-      if (!restoredRef.current || restoredRef.current.id !== streamRestoreId) {
-        const saved = localStorage.getItem(`checkpoint:${streamRestoreId}`);
-        if (saved) try {
-          const parsed = JSON.parse(saved);
-          const els = Array.isArray(parsed) ? parsed : parsed.elements;
-          const vp = Array.isArray(parsed) ? null : parsed.viewport ?? null;
-          restoredRef.current = { id: streamRestoreId, elements: els, viewport: vp };
-        } catch {}
+    const doStream = async () => {
+      // Load checkpoint base (once per restoreId) — from server via callServerTool
+      let base: any[] | undefined;
+      if (streamRestoreId) {
+        if (!restoredRef.current || restoredRef.current.id !== streamRestoreId) {
+          if (loadCheckpoint) {
+            const saved = await loadCheckpoint(streamRestoreId);
+            if (saved) {
+              const converted = convertRawElements(saved.elements);
+              restoredRef.current = { id: streamRestoreId, elements: converted };
+            }
+          }
+        }
+        base = restoredRef.current?.elements;
+        // Extract camera from base as fallback
+        if (!viewport && base) {
+          const cam = base.find((el: any) => el.type === "cameraUpdate");
+          if (cam) viewport = { x: cam.x, y: cam.y, width: cam.width, height: cam.height };
+        }
+        if (base && streamDeleteIds.size > 0) {
+          base = base.filter((el: any) => !streamDeleteIds.has(el.id) && !streamDeleteIds.has(el.containerId));
+        }
       }
-      base = restoredRef.current?.elements;
-      savedViewport = restoredRef.current?.viewport ?? null;
-      if (base && streamDeleteIds.size > 0) {
-        base = base.filter((el: any) => !streamDeleteIds.has(el.id));
-      }
-    }
 
-    // Use saved viewport as fallback if no cameraUpdate in new elements
-    const effectiveViewport = viewport ?? savedViewport;
-
-    if (drawElements.length > 0 && drawElements.length !== latestRef.current.length) {
-      // Play pencil sound for each new element
-      const prevCount = latestRef.current.length;
-      for (let i = prevCount; i < drawElements.length; i++) {
-        playStroke(drawElements[i].type ?? "rectangle");
+      if (drawElements.length > 0 && drawElements.length !== latestRef.current.length) {
+        // Play pencil sound for each new element
+        const prevCount = latestRef.current.length;
+        for (let i = prevCount; i < drawElements.length; i++) {
+          playStroke(drawElements[i].type ?? "rectangle");
+        }
+        latestRef.current = drawElements;
+        setCount(drawElements.length);
+        const jittered = drawElements.map((el: any) => ({ ...el, seed: Math.floor(Math.random() * 1e9) }));
+        renderSvgPreview(jittered, viewport, base);
+      } else if (base && base.length > 0 && latestRef.current.length === 0) {
+        // First render: show restored base before new elements stream in
+        renderSvgPreview([], viewport, base);
       }
-      latestRef.current = drawElements;
-      setCount(drawElements.length);
-      const jittered = drawElements.map((el: any) => ({ ...el, seed: Math.floor(Math.random() * 1e9) }));
-      renderSvgPreview(jittered, effectiveViewport, base);
-    } else if (base && base.length > 0 && latestRef.current.length === 0) {
-      // First render: show restored base before new elements stream in
-      renderSvgPreview([], effectiveViewport, base);
-    }
+    };
+    doStream();
   }, [toolInput, isFinal, renderSvgPreview]);
 
   // Render already-converted elements directly (skip convertToExcalidrawElements)
@@ -653,16 +664,6 @@ function ExcalidrawApp() {
 
       app.ontoolinput = async (input) => {
         const args = (input as any)?.arguments || input;
-        // Use the JSON-RPC tool call ID as localStorage key (stable across reloads)
-        const toolCallId = String(app.getHostContext()?.toolInfo?.id ?? "default");
-        setStorageKey(toolCallId);
-        // Check for persisted edits from a previous fullscreen session
-        const persisted = loadPersistedElements();
-        if (persisted && persisted.length > 0) {
-          elementsRef.current = persisted;
-          setElements(persisted);
-          setUserEdits(persisted);
-        }
         setInputIsFinal(true);
         setToolInput(args);
       };
@@ -672,16 +673,14 @@ function ExcalidrawApp() {
         if (cpId) {
           checkpointIdRef.current = cpId;
           setCheckpointId(cpId);
-          setCheckpointViewport(svgViewportRef.current);
-          // Save current elements + viewport to checkpoint
-          const els = elementsRef.current;
-          if (els.length > 0) {
-            try {
-              localStorage.setItem(`checkpoint:${cpId}`, JSON.stringify({
-                elements: els,
-                viewport: svgViewportRef.current,
-              }));
-            } catch {}
+          // Use checkpointId as localStorage key for persisting user edits
+          setStorageKey(cpId);
+          // Check for persisted edits from a previous fullscreen session
+          const persisted = loadPersistedElements();
+          if (persisted && persisted.length > 0) {
+            elementsRef.current = persisted;
+            setElements(persisted);
+            setUserEdits(persisted);
           }
         }
       };
@@ -737,7 +736,15 @@ function ExcalidrawApp() {
           onClick={undefined}
           style={undefined}
         >
-          <DiagramView toolInput={toolInput} isFinal={inputIsFinal} displayMode={displayMode} onElements={(els) => { elementsRef.current = els; setElements(els); }} editedElements={userEdits ?? undefined} onViewport={(vp) => { svgViewportRef.current = vp; }} />
+          <DiagramView toolInput={toolInput} isFinal={inputIsFinal} displayMode={displayMode} onElements={(els) => { elementsRef.current = els; setElements(els); }} editedElements={userEdits ?? undefined} onViewport={(vp) => { svgViewportRef.current = vp; }} loadCheckpoint={async (id) => {
+            if (!appRef.current) return null;
+            try {
+              const result = await appRef.current.callServerTool({ name: "read_checkpoint", arguments: { id } });
+              const text = (result.content[0] as any)?.text;
+              if (!text) return null;
+              return JSON.parse(text);
+            } catch { return null; }
+          }} />
         </div>
       )}
     </main>

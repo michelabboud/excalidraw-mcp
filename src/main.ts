@@ -10,6 +10,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import cors from "cors";
 import type { Request, Response } from "express";
+import { FileCheckpointStore } from "./checkpoint-store.js";
 import { createServer } from "./server.js";
 
 /**
@@ -80,10 +81,12 @@ export async function startStdioServer(
 }
 
 async function main() {
+  const store = new FileCheckpointStore();
+  const factory = () => createServer(store);
   if (process.argv.includes("--stdio")) {
-    await startStdioServer(createServer);
+    await startStdioServer(factory);
   } else {
-    await startStreamableHTTPServer(createServer);
+    await startStreamableHTTPServer(factory);
   }
 }
 
